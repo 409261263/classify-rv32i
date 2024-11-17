@@ -1,41 +1,11 @@
 .globl read_matrix
 
 .text
-# ==============================================================================
-# FUNCTION: Binary Matrix File Reader
-#
-# Loads matrix data from a binary file into dynamically allocated memory.
-# Matrix dimensions are read from file header and stored at provided addresses.
-#
-# Binary File Format:
-#   Header (8 bytes):
-#     - Bytes 0-3: Number of rows (int32)
-#     - Bytes 4-7: Number of columns (int32)
-#   Data:
-#     - Subsequent 4-byte blocks: Matrix elements
-#     - Stored in row-major order: [row0|row1|row2|...]
-#
-# Arguments:
-#   Input:
-#     a0: Pointer to filename string
-#     a1: Address to write row count
-#     a2: Address to write column count
-#
-#   Output:
-#     a0: Base address of loaded matrix
-#
-# Error Handling:
-#   Program terminates with:
-#   - Code 26: Dynamic memory allocation failed
-#   - Code 27: File access error (open/EOF)
-#   - Code 28: File closure error
-#   - Code 29: Data read error
-#
-# Memory Note:
-#   Caller is responsible for freeing returned matrix pointer
-# ==============================================================================
+# =======================================================
+# FUNCTION: Binary Matrix File Reader (No MUL Instruction)
+# Loads a matrix from a binary file into dynamically allocated memory.
+# =======================================================
 read_matrix:
-    
     # Prologue
     addi sp, sp, -40
     sw ra, 0(sp)
@@ -45,67 +15,71 @@ read_matrix:
     sw s3, 16(sp)
     sw s4, 20(sp)
 
-    mv s3, a1         # save and copy rows
-    mv s4, a2         # save and copy cols
+    mv s3, a1          # Save address to store row count
+    mv s4, a2          # Save address to store column count
 
-    li a1, 0
-
-    jal fopen
+    li a1, 0           # File mode: read only
+    jal fopen          # Open file
 
     li t0, -1
-    beq a0, t0, fopen_error   # fopen didn't work
+    beq a0, t0, fopen_error   # If fopen failed, exit with code 27
 
-    mv s0, a0        # file
+    mv s0, a0          # Save file pointer
 
-    # read rows n columns
-    mv a0, s0
-    addi a1, sp, 28  # a1 is a buffer
-
-    li a2, 8         # look at 2 numbers
-
+    # Read header (rows and columns)
+    mv a0, s0          # File pointer
+    addi a1, sp, 28    # Buffer to store row/column data
+    li a2, 8           # Read 8 bytes (2 integers)
     jal fread
 
     li t0, 8
-    bne a0, t0, fread_error
+    bne a0, t0, fread_error   # If fread fails, exit with code 29
 
-    lw t1, 28(sp)    # opening to save num rows
-    lw t2, 32(sp)    # opening to save num cols
+    # Extract row and column counts
+    lw t1, 28(sp)      # Load rows from buffer
+    lw t2, 32(sp)      # Load columns from buffer
 
-    sw t1, 0(s3)     # saves num rows
-    sw t2, 0(s4)     # saves num cols
+    sw t1, 0(s3)       # Store rows to output address
+    sw t2, 0(s4)       # Store columns to output address
 
-    # mul s1, t1, t2   # s1 is number of elements
-    # FIXME: Replace 'mul' with your own implementation
+    # Calculate total matrix size (rows * columns)
+    li s1, 0           # Total elements (initialize to 0)
+    mv t3, t2          # Copy columns to temporary register
 
-    slli t3, s1, 2
-    sw t3, 24(sp)    # size in bytes
+calc_elements:
+    beqz t1, alloc_memory  # If rows == 0, move to memory allocation
+    add s1, s1, t3         # Accumulate: total_elements += columns
+    addi t1, t1, -1        # Decrement rows
+    j calc_elements        # Repeat until rows == 0
 
-    lw a0, 24(sp)    # a0 = size in bytes
+alloc_memory:
+    slli t3, s1, 2         # Multiply total elements by 4 (size in bytes)
+    sw t3, 24(sp)          # Store total memory size
 
+    mv a0, t3              # Allocate memory for matrix
     jal malloc
 
-    beq a0, x0, malloc_error
+    beq a0, x0, malloc_error  # If malloc fails, exit with code 26
 
-    # set up file, buffer and bytes to read
-    mv s2, a0        # matrix
-    mv a0, s0
-    mv a1, s2
-    lw a2, 24(sp)
+    mv s2, a0              # Save pointer to allocated memory
 
+    # Read matrix data
+    mv a0, s0              # File pointer
+    mv a1, s2              # Buffer to store matrix data
+    lw a2, 24(sp)          # Number of bytes to read
     jal fread
 
-    lw t3, 24(sp)
-    bne a0, t3, fread_error
+    lw t3, 24(sp)          # Total bytes
+    bne a0, t3, fread_error  # If fread fails, exit with code 29
 
+    # Close file
     mv a0, s0
-
     jal fclose
 
     li t0, -1
+    beq a0, t0, fclose_error  # If fclose fails, exit with code 28
 
-    beq a0, t0, fclose_error
-
-    mv a0, s2
+    mv a0, s2              # Return pointer to matrix
 
     # Epilogue
     lw ra, 0(sp)
@@ -115,9 +89,9 @@ read_matrix:
     lw s3, 16(sp)
     lw s4, 20(sp)
     addi sp, sp, 40
+    jr ra                  # Return to caller
 
-    jr ra
-
+# Error handlers
 malloc_error:
     li a0, 26
     j error_exit
